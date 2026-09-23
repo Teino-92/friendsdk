@@ -10,12 +10,13 @@ import { createFriendSoundKit, type FriendSoundCue, type FriendSoundKit } from "
 import { createWorld, STATIONS, type StationId, type World, type Facing } from "./world.js";
 import { CrystalEcho, StarRain, VaultLock } from "./minigames.js";
 import { PixelIcon } from "./icons.js";
-import { DECOR, MAX_DECOR, buyDecor, placeDecor, pickUpDecor, type DecorId, UPGRADES, COOLDOWN_MS, JAM_MS, VAULT_CHARGES, buyUpgrade, dayOf, decodeSave, earn, encodeSave, freshProgress, level, msToDawn,
+import { createChiptune, type Chiptune, type SongId } from "./audio.js";
+import { DECOR, MAX_DECOR, MAX_NAME, renameFriend, buyDecor, placeDecor, pickUpDecor, type DecorId, UPGRADES, COOLDOWN_MS, JAM_MS, VAULT_CHARGES, buyUpgrade, dayOf, decodeSave, earn, encodeSave, freshProgress, level, msToDawn,
   multiplier, rollover, switchClock, type Clock, type Progress, type UpgradeId } from "./progress.js";
 import "@rarefriends/friendsdk/frame.css";
 import "./style.css";
 
-type Menu = StationId | "loot" | "settings" | "reward" | null;
+type Menu = StationId | "loot" | "settings" | "wallet" | "reward" | null;
 type Mini = "echo" | "rain" | "lock" | null;
 const rf = (v: bigint) => `${formatGameAmount(v, 18)} RF`;
 const clockText = (ms: number) => { const s = Math.max(0, Math.ceil(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
@@ -26,14 +27,16 @@ export default function VaultIsland({ friendId, client, paused }: GameComponentP
   const definition = client.definition;
   const canvas = useRef<HTMLCanvasElement>(null), world = useRef<World | null>(null), sound = useRef<FriendSoundKit | null>(null);
   const sprites = useRef<GenerationSprites | null>(null), keys = useRef(new Set<string>()), epoch = useRef(0), locked = useRef(false);
+  const tune = useRef<Chiptune | null>(null);
   const [snapshot, setSnapshot] = useState<GameSnapshot | null>(null), [art, setArt] = useState<GenerationSprites | null>(null);
   const [progress, setProgress] = useState<Progress>(() => freshProgress(friendId, "demo", Date.now()));
   const [now, setNow] = useState(Date.now()), [near, setNear] = useState<StationId | null>(null);
   const [menu, setMenu] = useState<Menu>(null), [mini, setMini] = useState<Mini>(null), [result, setResult] = useState<GamePlay | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [toast, setToast] = useState<{ text: string; until: number } | null>(null), [loadError, setLoadError] = useState(""), [revision, setRevision] = useState(0);
-  const [lowGfx, setLowGfx] = useState(() => navigator.webdriver === true), [muted, setMuted] = useState(true), [reducedMotion, setReducedMotion] = useState(false), [importText, setImportText] = useState(""), [saveCode, setSaveCode] = useState("");
+  const [lowGfx, setLowGfx] = useState(() => navigator.webdriver === true), [nameDraft, setNameDraft] = useState(""), [muted, setMuted] = useState(true), [reducedMotion, setReducedMotion] = useState(false), [importText, setImportText] = useState(""), [saveCode, setSaveCode] = useState("");
   const live = useRef({ paused, menu, mini, reducedMotion }); live.current = { paused, menu, mini, reducedMotion };
   const cue = useCallback((c: FriendSoundCue) => sound.current?.play(c), []);
+  const wake = useCallback(() => { void sound.current?.unlock(); void tune.current?.unlock(); }, []);
   const say = (text: string) => setToast({ text, until: Date.now() + 6000 });
   const [build, setBuild] = useState<{ type: DecorId | null; rot: number; pickup: boolean } | null>(null), [buildHint, setBuildHint] = useState("");
   const buildRef = useRef(build); buildRef.current = build;
@@ -42,14 +45,14 @@ export default function VaultIsland({ friendId, client, paused }: GameComponentP
 
   /* Session: fresh island per Friend, canonical sprites + runtime snapshot. */
   useEffect(() => {
-    const version = ++epoch.current; locked.current = false; sound.current = createFriendSoundKit({ muted: true });
-    setSnapshot(null); setArt(null); setMenu(null); setMini(null); setResult(null); setError(""); setLoadError(""); setMuted(true); setToast(null); setBuild(null); seenDay.current = null;
+    const version = ++epoch.current; locked.current = false; sound.current = createFriendSoundKit({ muted: true }); tune.current = createChiptune({ muted: true });
+    setSnapshot(null); setArt(null); setMenu(null); setMini(null); setResult(null); setError(""); setLoadError(""); setMuted(true); setToast(null); setBuild(null); setNameDraft(""); seenDay.current = null;
     setProgress(freshProgress(friendId, "demo", Date.now()));
     void Promise.all([createFriendReader().read(friendId), client.read()]).then(([a, s]) => {
       if (version !== epoch.current) return; if (s.friendId !== friendId) throw new Error("Game session does not match the selected Friend.");
       sprites.current = a; setArt(a); setSnapshot(s);
     }).catch(e => { if (version === epoch.current) setLoadError(e instanceof Error ? e.message : "The island could not load."); });
-    return () => { epoch.current++; sound.current?.dispose(); sound.current = null; };
+    return () => { epoch.current++; sound.current?.dispose(); sound.current = null; tune.current?.dispose(); tune.current = null; };
   }, [client, friendId, revision]);
 
   /* Day clock: dawn refills vault charges; skipped days evaporate Stardust and reset the streak. */
@@ -69,7 +72,7 @@ export default function VaultIsland({ friendId, client, paused }: GameComponentP
     let w: World; try { w = createWorld(node, window.matchMedia("(pointer: coarse)").matches); } catch { setLoadError("This browser cannot start 3D graphics (WebGL). Try another browser or device."); return; }
     world.current = w; const fit = () => w.resize(node.clientWidth || 960, node.clientHeight || 640); fit();
     const ro = new ResizeObserver(fit); ro.observe(node);
-    let raf = 0, prev = 0, lastNear: StationId | null = null, lastKey = "";
+    let raf = 0, prev = 0, lastStep = 0, lastNear: StationId | null = null, lastKey = "";
     const loop = (t: number) => { const dt = prev ? Math.min((t - prev) / 1000, 0.05) : 0; prev = t; const L = live.current;
       if (L.mini) { raf = requestAnimationFrame(loop); return; } // the island is hidden behind mini-games: skip rendering
       const active = !L.paused && !L.menu && !L.mini && !document.hidden;
@@ -77,7 +80,8 @@ export default function VaultIsland({ friendId, client, paused }: GameComponentP
       const r = w.step(dt, t, active ? kx : 0, active ? ky : 0, active, L.reducedMotion);
       if (sprites.current) { const frame = L.reducedMotion ? 0 : Math.floor(t / (r.moving ? 90 : 170)) % 8, id = `${r.facing}${r.moving}${frame}`;
         if (id !== lastKey) { lastKey = id; w.setFriendPixels(spriteFrame(sprites.current, r.facing as Facing, r.moving, frame, r.facing === "left" ? "left" : "right").frame.rows); } }
-      if (r.near !== lastNear) { lastNear = r.near; setNear(r.near); }
+      if (r.near !== lastNear) { if (r.near && !lastNear) tune.current?.sfx("arrive"); lastNear = r.near; setNear(r.near); }
+      if (r.moving && t - lastStep > (L.reducedMotion ? 520 : 330)) { lastStep = t; tune.current?.sfx("step"); }
       if (buildRef.current && Math.floor(t / 150) !== Math.floor((t - dt * 1000) / 150)) { const pv = w.buildPreview(); setBuildHint(h => { const n = pv ? pv.problem || (buildRef.current?.pickup ? "Click to pick it up" : "Click to place") : "Point at the ground"; return h.startsWith("!") ? h : n; }); }
       node.dataset.x = r.x.toFixed(2); node.dataset.z = r.z.toFixed(2); if (Math.floor(t / 250) !== Math.floor((t - dt * 1000) / 250)) node.dataset.stations = JSON.stringify(w.screenPoints(node.clientWidth, node.clientHeight)); raf = requestAnimationFrame(loop); };
     raf = requestAnimationFrame(loop);
@@ -87,6 +91,9 @@ export default function VaultIsland({ friendId, client, paused }: GameComponentP
   useEffect(() => { world.current?.setUpgrades(progress.upgrades); }, [progress.upgrades, ready]);
   useEffect(() => { world.current?.setDecor(progress.decor); }, [progress.decor, ready]);
   useEffect(() => { world.current?.setLowGraphics(lowGfx); }, [lowGfx, ready]);
+  useEffect(() => { const song: SongId = mini === "rain" ? "rain" : mini === "lock" ? "lock" : mini === "echo" ? "echo" : "island";
+    tune.current?.setSong(ready ? song : null); }, [mini, ready]);
+  useEffect(() => { world.current?.setFriendName(progress.name); }, [progress.name, ready]);
   useEffect(() => { world.current?.setBuild(build); if (!build) setBuildHint(""); }, [build, ready]);
   useEffect(() => { const w = world.current; if (!w || !snapshot) return;
     const wait = (at: number) => at - now > 0 ? clockText(at - now) : "";
@@ -96,7 +103,7 @@ export default function VaultIsland({ friendId, client, paused }: GameComponentP
     (Object.keys(NAMES) as StationId[]).forEach(id => w.setLabel(id, `${NAMES[id]}|${status[id]}`, near === id)); });
   useEffect(() => { if (paused || menu || mini) { keys.current.clear(); world.current?.stop(); } }, [paused, menu, mini]);
 
-  const openStation = (id: StationId | null) => { if (!id || busy || paused || mini) return; setError(""); setMenu(id); cue("select"); void sound.current?.unlock(); };
+  const openStation = (id: StationId | null) => { if (!id || busy || paused || mini) return; setError(""); setMenu(id); cue("select"); tune.current?.sfx("menu"); wake(); };
   useEffect(() => { const down = (e: KeyboardEvent) => { const k = e.key.toLowerCase(); const L = live.current; if (L.menu || L.mini || L.paused) return;
       if (MOVE_KEYS[k]) { e.preventDefault(); keys.current.add(k); }
       if (buildRef.current) { if (k === "r" && !e.repeat) setBuild(b => b && { ...b, rot: (b.rot + 1) % 4 }); if (k === "escape") setBuild(null); return; }
@@ -106,7 +113,7 @@ export default function VaultIsland({ friendId, client, paused }: GameComponentP
   const nearRef = useRef<StationId | null>(null); nearRef.current = near;
 
   async function act(work: () => Promise<void>, sfx?: FriendSoundCue, after?: () => void) {
-    if (locked.current || paused) return; const version = epoch.current; locked.current = true; setBusy(true); setError(""); void sound.current?.unlock();
+    if (locked.current || paused) return; const version = epoch.current; locked.current = true; setBusy(true); setError(""); wake();
     try { await work(); const v = await client.read(); if (version === epoch.current) { setSnapshot(v); if (sfx) cue(sfx); after?.(); } }
     catch (e) { if (version === epoch.current) setError(e instanceof Error ? e.message : "The preview action failed."); }
     finally { if (version === epoch.current) { locked.current = false; setBusy(false); } }
@@ -123,7 +130,7 @@ export default function VaultIsland({ friendId, client, paused }: GameComponentP
   const lvl = level(progress), cd = COOLDOWN_MS[progress.clock], owned = snapshot.inventory.reduce((a, b) => a + b, 0n);
   const waitFor = (id: StationId) => id === "echo" ? progress.ready.echo - now : id === "rain" ? progress.ready.rain - now : id === "vault" ? progress.jammedUntil - now : 0;
   const vaultBlock = pending ? "" : snapshot.consumables === 0n ? "You need a Vault Key from the merchant." : progress.charges <= 0 ? `No charges left today. Dawn in ${clockText(msToDawn(progress.clock, now))}.` : waitFor("vault") > 0 ? `The lock is jammed for ${clockText(waitFor("vault"))}.` : "";
-  const startMini = (m: Exclude<Mini, null>) => { setMenu(null); setMini(m); cue("action-start"); void sound.current?.unlock(); };
+  const startMini = (m: Exclude<Mini, null>) => { setMenu(null); setMini(m); cue("action-start"); wake(); };
   const openVault = () => act(async () => { const v = epoch.current; const play = pending ?? (await client.play(1n))[0]; const settled = await client.settle(play.id);
     if (v === epoch.current) setResult(settled); }, "anticipation", () => { world.current?.setChest(true); window.setTimeout(() => setMenu("reward"), reducedMotion ? 0 : 1100); });
   const closeReward = () => { world.current?.setChest(false); setMenu(null); setResult(null); };
@@ -134,9 +141,9 @@ export default function VaultIsland({ friendId, client, paused }: GameComponentP
     if (b.pickup) { if (pv.pick < 0) return; const item = progress.decor[pv.pick], next = pickUpDecor(progress, pv.pick); if (!next || !item) return;
       setProgress(next); setBuild({ type: item.t, rot: item.rot, pickup: false }); setBuildHint("Picked up. Click somewhere to place it again."); cue("select"); return; }
     if (!b.type) return; if (progress.decor.length >= MAX_DECOR) { setBuildHint(`!The island holds ${MAX_DECOR} decorations at most`); return; }
-    const problem = w.validate(b.type, pv.x, pv.z); if (problem) { setBuildHint(`!${problem}`); window.setTimeout(() => setBuildHint(h => h.startsWith("!") ? "" : h), 1600); cue("impact"); return; }
+    const problem = w.validate(b.type, pv.x, pv.z); if (problem) { setBuildHint(`!${problem}`); window.setTimeout(() => setBuildHint(h => h.startsWith("!") ? "" : h), 1600); cue("impact"); tune.current?.sfx("deny"); return; }
     const next = placeDecor(progress, { t: b.type, x: pv.x, z: pv.z, rot: b.rot }); if (!next) return;
-    setProgress(next); cue("purchase"); const t = nextType(next.stash, b.type); setBuild(t ? { ...b, type: t } : { ...b, type: null });
+    setProgress(next); cue("purchase"); tune.current?.sfx("place"); const t = nextType(next.stash, b.type); setBuild(t ? { ...b, type: t } : { ...b, type: null });
     if (!t) setBuildHint("Nothing left to place. Buy more at the workshop."); }
   const stock = DECOR.reduce((n, d) => n + progress.stash[d.id], 0);
   const startDecorate = () => { setMenu(null); setBuild({ type: nextType(progress.stash, null), rot: 0, pickup: stock === 0 }); };
@@ -160,8 +167,8 @@ export default function VaultIsland({ friendId, client, paused }: GameComponentP
         onPointerMove={e => { if (e.pointerType === "mouse") world.current?.hover(e.clientX, e.clientY, e.currentTarget.getBoundingClientRect()); }}
         onPointerLeave={() => world.current?.hover(null)} />
       <div className="vi-hud">
-        <div className="vi-card"><b>{rf(snapshot.rfBalance)}</b> preview<br /><span>{snapshot.consumables.toString()} keys · vault {progress.charges}/{VAULT_CHARGES}</span></div>
-        <div className="vi-card vi-dust"><b>✦ {progress.stardust}</b> Stardust<br /><span>Streak {progress.streak} · x{multiplier(progress).toFixed(1)} · island lv {lvl}</span></div>
+        <button type="button" className="vi-card vi-card-btn" onClick={() => setMenu("wallet")}><b>{rf(snapshot.rfBalance)}</b> preview<br /><span>{snapshot.consumables.toString()} keys · vault {progress.charges}/{VAULT_CHARGES}</span></button>
+        <div className="vi-card vi-dust"><b>✦ {progress.stardust}</b> Stardust<br /><span>{progress.name ? `${progress.name} · ` : ""}Streak {progress.streak} · x{multiplier(progress).toFixed(1)} · lv {lvl}</span></div>
         <div className="vi-card vi-clock"><b>Day {dayOf(progress.clock, now) - progress.firstDay + 1}</b><br /><span>dawn in {clockText(msToDawn(progress.clock, now))}</span></div>
         {!build && (stock > 0 || progress.decor.length > 0) && <button type="button" onClick={startDecorate}>Decorate</button>}
         <button type="button" onClick={() => setMenu("loot")}>Loot{owned > 0n ? ` ${owned}` : ""}</button>
@@ -193,7 +200,7 @@ export default function VaultIsland({ friendId, client, paused }: GameComponentP
         else { setProgress(p => ({ ...p, jammedUntil: Date.now() + JAM_MS[p.clock] })); pay(0, "Lock jammed"); } }} />}
     </div>}
 
-    {menu && <GameMenu title={menu === "loot" ? "Your loot" : menu === "settings" ? "Settings" : menu === "reward" ? "The vault opens" : NAMES[menu]}
+    {menu && <GameMenu title={menu === "loot" ? "Your loot" : menu === "settings" ? "Settings" : menu === "wallet" ? "Wallet and backing" : menu === "reward" ? "The vault opens" : NAMES[menu as StationId]}
       onClose={busy || menu === "reward" ? undefined : () => setMenu(null)}>
       {menu === "merchant" ? <>
         <p>A Vault Key lets you attempt the vault once you pick its lock. A failed lock keeps your key. Loot is decided by chance, never by skill.</p>
@@ -231,13 +238,33 @@ export default function VaultIsland({ friendId, client, paused }: GameComponentP
         <div className="vi-row vi-center"><button type="button" disabled={busy || paused} onClick={closeReward}>Keep in loot bag</button>
           <button type="button" className="rf-frame-primary" disabled={busy || paused} onClick={() => void act(() => client.redeem(result.outcomeId!, 1n), "reward", () => { closeReward(); say(`Redeemed ${rf(outcome.reward)} (simulated).`); })}>Redeem · {rf(outcome.reward)}</button></div>
       </div> : <div className="vi-reward"><p>The vault is still sealing your loot.</p><button type="button" className="rf-frame-primary" disabled={busy || paused || !result} onClick={() => void act(async () => { if (result) setResult(await client.settle(result.id)); })}>Resume opening</button></div>)
-      : menu === "loot" ? <>
+      : menu === "wallet" ? <>
+        <p>Everything below comes from the game ledger for Friend #{friendId.toString()}, in <b>{snapshot.mode}</b> mode. RF amounts are simulated for this preview.</p>
+        <table className="vi-table"><tbody>
+          <tr><td>RF balance</td><td>{rf(snapshot.rfBalance)}</td></tr>
+          <tr><td>Vault Keys</td><td>{snapshot.consumables.toString()}</td></tr>
+          <tr><td>Loot held</td><td>{owned.toString()} items · {rf(definition.outcomes.reduce((sum, o, i) => sum + o.reward * snapshot.inventory[i], 0n))}</td></tr>
+          <tr><td>Backing stake</td><td>{rf(snapshot.stake)}</td></tr>
+          <tr><td>Free backing</td><td>{rf(snapshot.freeStake)}</td></tr>
+          <tr><td>Reserved for open plays</td><td>{snapshot.reservedPlays.toString()} · {rf(snapshot.rewardLiability)}</td></tr>
+        </tbody></table>
+        <p className="vi-small"><b>No ETH balance and no swap here.</b> FriendSDK v0.1.2 exposes the game ledger only: it has no wallet-balance, trading or swap API, and the game sandbox cannot reach the chain. An ETH to RF swap at the merchant, and a live ETH balance, both need future SDK support. Your wallet and network are handled by the SDK runtime, outside this game.</p>
+      </> : menu === "loot" ? <>
         <p>RF loot keeps its fixed value with no expiry.</p>
         {definition.outcomes.map((o, i) => <div className="vi-item" key={o.name}><span className="vi-icon"><PixelIcon name={o.name} size={30} /></span>
           <span className="vi-grow"><strong>{o.name}</strong><small>{snapshot.inventory[i].toString()} owned · {rf(o.reward)} each</small></span>
           <button type="button" disabled={busy || paused || snapshot.inventory[i] === 0n} onClick={() => void act(() => client.redeem(i + 1, 1n), "reward")}>Redeem 1</button></div>)}
       </> : <>
-        <button type="button" aria-pressed={!muted} onClick={() => { const n = !muted; setMuted(n); sound.current?.setMuted(n); if (!n) void sound.current?.unlock(); }}>{muted ? "Sound off" : "Sound on"}</button>
+        <h3 className="vi-h3">Name your Friend</h3>
+        <p className="vi-small">A local nickname, stored in your save code. The NFT and its artwork are untouched.</p>
+        <div className="vi-row">
+          <input className="vi-name" maxLength={MAX_NAME} value={nameDraft || progress.name} placeholder="Biscotte" aria-label="Friend nickname"
+            onChange={e => setNameDraft(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { setProgress(renameFriend(progress, nameDraft)); cue("reward"); } }} />
+          <button type="button" disabled={paused} onClick={() => { setProgress(renameFriend(progress, nameDraft || progress.name)); tune.current?.sfx("win"); }}>Save name</button>
+          {progress.name && <button type="button" disabled={paused} onClick={() => { setProgress(renameFriend(progress, "")); setNameDraft(""); }}>Clear</button>}
+        </div>
+        <h3 className="vi-h3">Sound and display</h3>
+        <button type="button" aria-pressed={!muted} onClick={() => { const n = !muted; setMuted(n); sound.current?.setMuted(n); tune.current?.setMuted(n); if (!n) wake(); }}>{muted ? "Sound and music off" : "Sound and music on"}</button>
         <label className="vi-check"><input type="checkbox" checked={reducedMotion} onChange={e => setReducedMotion(e.target.checked)} /> Reduce motion (still camera, no bobbing, clouds, trails or flashing)</label>
         <label className="vi-check"><input type="checkbox" checked={lowGfx} onChange={e => setLowGfx(e.target.checked)} /> Low graphics (no shadows, lower resolution, smoother on older phones)</label>
         <label className="vi-check"><input type="checkbox" checked={progress.clock === "demo"} onChange={e => { const c: Clock = e.target.checked ? "demo" : "real"; setProgress(p => switchClock(p, c, Date.now())); }} /> Demo clock: 1 day = 5 minutes, 60s recharges. Turn off for real days and 3 minute recharges. Switching resets the streak.</label>

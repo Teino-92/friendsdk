@@ -196,6 +196,11 @@ export function createWorld(canvas: HTMLCanvasElement, mobile: boolean) {
   const blob = new THREE.Mesh(new THREE.CircleGeometry(0.34, 16), new THREE.MeshBasicMaterial({ color: 0x2a1a3a, transparent: true, opacity: 0.28, depthWrite: false }));
   blob.rotation.x = -Math.PI / 2; blob.position.y = 0.012; scene.add(blob);
 
+  const nameCanvas = document.createElement("canvas"); nameCanvas.width = 512; nameCanvas.height = 96;
+  const nameTex = new THREE.CanvasTexture(nameCanvas); nameTex.colorSpace = THREE.SRGBColorSpace; nameTex.anisotropy = 4;
+  const nameTag = new THREE.Sprite(new THREE.SpriteMaterial({ map: nameTex, depthTest: false, depthWrite: false, transparent: true }));
+  nameTag.visible = false; nameTag.renderOrder = 11; scene.add(nameTag);
+  let friendName = "";
   const pos = { ...SPAWN }; let dest: { x: number; z: number } | null = null; let facing: Facing = "down"; let bought = new Set<UpgradeId>();
   let chestOpen = false, lidAngle = 0, trailClock = 0; let route: { x: number; z: number }[] = [];
   /* A* over a 0.5-unit grid, then string-pulled into a few straight legs */
@@ -289,6 +294,14 @@ export function createWorld(canvas: HTMLCanvasElement, mobile: boolean) {
     /** Screen position (CSS px within the canvas) of each station label; used by automated tests. */
     screenPoints(width: number, height: number) { return Object.fromEntries([...labels.entries()].map(([id, l]) => { const v = l.sprite.position.clone().project(camera);
       return [id, [Math.round((v.x + 1) / 2 * width), Math.round((1 - v.y) / 2 * height)]]; })); },
+    /** Local nickname shown above the Friend. Empty hides the tag. */
+    setFriendName(name: string) {
+      friendName = name.trim(); nameTag.visible = friendName.length > 0; if (!friendName) return;
+      const ctx = nameCanvas.getContext("2d")!; ctx.clearRect(0, 0, 512, 96);
+      ctx.font = "bold 54px 'Trebuchet MS', system-ui, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.lineWidth = 10; ctx.strokeStyle = "#2a1f4a"; ctx.strokeText(friendName, 256, 52);
+      ctx.fillStyle = "#fff8ef"; ctx.fillText(friendName, 256, 52); nameTex.needsUpdate = true;
+    },
     setLabel(id: StationId, text: string, active: boolean) { const l = labels.get(id); if (!l || (l.text === text && l.active === active)) return; l.text = text; l.active = active; drawLabel(l); },
     stop() { dest = null; route = []; finalDest = null; hover = null; },
     /** Touch users set the ghost by tapping; mouse users by hovering. */
@@ -337,6 +350,8 @@ export function createWorld(canvas: HTMLCanvasElement, mobile: boolean) {
       /* Camera follows with a gentle ease */
       const goal = new THREE.Vector3(pos.x, 0, pos.z); target.lerp(goal, still ? 1 : Math.min(1, dt * 4));
       camera.position.copy(target).add(OFFSET); camera.lookAt(target.x, target.y + 0.4, target.z);
+      if (nameTag.visible) { nameTag.position.set(pos.x, 1.55 + bob, pos.z);
+        const dn = camera.position.distanceTo(nameTag.position); nameTag.scale.set(dn * 0.14, dn * 0.0263, 1); }
       labels.forEach(l => { const d = camera.position.distanceTo(l.sprite.position); l.sprite.scale.set(d * 0.135, d * 0.0298, 1); }); // same on-screen size near or far
       sun.position.copy(target).add(SUN); sun.target.position.copy(target); sun.target.updateMatrixWorld();
       renderer.render(scene, camera);

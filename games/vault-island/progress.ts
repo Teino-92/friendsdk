@@ -26,7 +26,7 @@ export const JAM_MS: Record<Clock, number> = { demo: 45_000, real: 120_000 };
 export const VAULT_CHARGES = 5, EVAPORATION = 0.25, MAX_STREAK_BONUS = 10;
 
 export type Progress = Readonly<{
-  v: 2; friend: string; clock: Clock; stardust: number; streak: number; lastPlayDay: number | null;
+  v: 2; friend: string; name: string; clock: Clock; stardust: number; streak: number; lastPlayDay: number | null;
   upgrades: readonly UpgradeId[]; decor: readonly Placed[]; stash: Readonly<Record<DecorId, number>>; spent: number; bestEcho: number; bestRain: number;
   charges: number; chargesDay: number; firstDay: number; ready: Readonly<{ echo: number; rain: number }>; jammedUntil: number;
 }>;
@@ -38,7 +38,7 @@ export const level = (p: Progress) => Math.floor(p.spent / 100);
 const emptyStash = () => Object.fromEntries(DECOR.map(d => [d.id, 0])) as Record<DecorId, number>;
 
 export function freshProgress(friend: bigint, clock: Clock, now: number): Progress {
-  return { v: 2, friend: friend.toString(), clock, stardust: 0, streak: 0, lastPlayDay: null, upgrades: [], decor: [], stash: emptyStash(), spent: 0, bestEcho: 0, bestRain: 0,
+  return { v: 2, friend: friend.toString(), name: "", clock, stardust: 0, streak: 0, lastPlayDay: null, upgrades: [], decor: [], stash: emptyStash(), spent: 0, bestEcho: 0, bestRain: 0,
     charges: VAULT_CHARGES, chargesDay: dayOf(clock, now), firstDay: dayOf(clock, now), ready: { echo: 0, rain: 0 }, jammedUntil: 0 };
 }
 
@@ -108,7 +108,8 @@ export function decodeSave(code: string, friend: bigint): Progress {
   const stash = Array.isArray(packed.stash) && packed.stash.length === DECOR.length && packed.stash.every(n => Number.isInteger(n) && n >= 0 && n < 1000)
     ? Object.fromEntries(DECOR.map((d, i) => [d.id, (packed.stash as number[])[i]])) as Record<DecorId, number> : null;
   if (!decor || !stash) throw new Error("The save code is incomplete.");
-  const raw = { ...packed, decor, stash } as Partial<Progress>;
+  const name = typeof packed.name === "string" ? packed.name.slice(0, 16) : "";
+  const raw = { ...packed, decor, stash, name } as Partial<Progress>;
   const ids = new Set<string>(UPGRADES.map(u => u.id));
   const ok = raw.v === 2 && typeof raw.friend === "string" && (raw.clock === "demo" || raw.clock === "real") &&
     [raw.stardust, raw.streak, raw.bestEcho, raw.bestRain, raw.charges, raw.chargesDay, raw.firstDay, raw.jammedUntil, raw.spent].every(n => typeof n === "number" && Number.isFinite(n) && n >= 0) &&
@@ -117,4 +118,10 @@ export function decodeSave(code: string, friend: bigint): Progress {
   if (!ok) throw new Error("The save code is incomplete.");
   if (raw.friend !== friend.toString()) throw new Error(`This island belongs to Friend #${raw.friend}. Select that Friend to load it.`);
   return raw as Progress;
+}
+
+export const MAX_NAME = 16;
+/** Local nickname only: the NFT and its artwork are never modified. */
+export function renameFriend(p: Progress, name: string): Progress {
+  return { ...p, name: name.replace(/\s+/g, " ").trim().slice(0, MAX_NAME) };
 }

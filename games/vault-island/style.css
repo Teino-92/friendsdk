@@ -50,3 +50,6 @@
 .vi-build-hint{margin:0;background:#fff8efee;padding:4px 12px;border-radius:10px;font-weight:700;font-size:12px}.vi-build-hint.bad{background:#ff5a7a;color:#fff}
 .vi-touch-only{display:none}@media (hover:none){.vi-touch-only{display:inline-block}}
 @media(max-width:600px){.vi-build{bottom:40px;left:4px;right:4px;gap:3px}.vi-build-bar{padding:3px;gap:3px}.vi-build button{font-size:9px!important;padding:4px 6px!important}.vi-build-hint{font-size:10px;padding:2px 8px}}
+.vi-card-btn{pointer-events:auto;border-radius:12px!important;text-align:left;font-weight:400!important;box-shadow:none!important;background:#2a1f4ad9!important;color:#fff8ef!important;padding:7px 12px!important}
+.vi-card-btn:hover{background:#3d2f66!important}
+.vi-name{font:inherit;padding:8px 10px;border:2px solid #e6dccd;border-radius:10px;min-width:180px}
