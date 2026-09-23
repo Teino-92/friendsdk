@@ -1,0 +1,12 @@
+{
+  "name": "Vault Island",
+  "consumable": "Vault Key",
+  "price": "1000000000000000000",
+  "outcomes": [
+    { "name": "Crystal dust", "chanceBps": 5500, "reward": "200000000000000000" },
+    { "name": "Silver coin", "chanceBps": 3000, "reward": "1000000000000000000" },
+    { "name": "Gold bar", "chanceBps": 1100, "reward": "2000000000000000000" },
+    { "name": "Ruby", "chanceBps": 350, "reward": "5000000000000000000" },
+    { "name": "Friend crown", "chanceBps": 50, "reward": "20000000000000000000" }
+  ]
+}

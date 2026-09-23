@@ -168,13 +168,15 @@
     "check:live": "node scripts/check-live-browser.mjs"
   },
   "dependencies": {
-    "viem": "2.56.3",
-    "esbuild": "0.28.2"
+    "@types/three": "^0.169.0",
+    "esbuild": "0.28.2",
+    "three": "^0.169.0",
+    "viem": "2.56.3"
   },
   "peerDependencies": {
+    "playwright": "^1.63.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "playwright": "^1.63.0"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@types/react": "19.1.12",
